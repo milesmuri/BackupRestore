@@ -50,7 +50,8 @@ export UNIQUE_ID=`echo "$DS_PRIMARY_MAC_ADDRESS"|tr -d ':'` # Add Times? UNIQUE_
 # DS Script to backup user data with tar to Backups folder on repository.
 export DS_REPOSITORY_BACKUPS="$DS_REPOSITORY_PATH/Backups/$UNIQUE_ID"
 # Set backup count to number of tar files in backup repository - Contributed by Rhon Fitzwater
-export DS_BACKUP_COUNT=`/bin/ls -l "$DS_REPOSITORY_BACKUPS" | grep -E '*.tar|*.cpio.gz' | wc -l`
+# modified for ditto backups that create .zip files
+export DS_BACKUP_COUNT=`/bin/ls -l "$DS_REPOSITORY_BACKUPS" | grep -E '*.tar|*.zip' | wc -l`
 # Set Path to the folder with home folders
 export DS_USER_PATH="/Users"
 
@@ -171,6 +172,7 @@ echo -e \"Waiting for network to be ready\"
 sleep 120
 
 # try to ID user, fail out if it doesn't. Maybe unload the launchd item, wait for reboot to try again.
+echo -e \"id $USERZ\"
 if [[ \`id $USERZ\` ]]; then
 	# Directory Services must be set up, lets recreate the account.
 	# Create mobile account once were bound to DS
@@ -219,6 +221,66 @@ fi" > "$DS_INTERNAL_DRIVE/etc/restoremobilefilevault.$USERZ.sh"
 			# "$dscl" -f "$INTERNAL_DN" localonly -create "/Local/Target/Users/$USERZ" NFSHomeDirectory "${NFSHome}" &>/dev/null
 		else
 			echo -e "\tfilevault off"
+			#mm 21 aout 2011 17h10
+# *********
+			# Write plist to start script at first boot
+			echo -e "
+<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">
+<plist version=\"1.0\">
+<dict>
+	<key>Label</key>
+	<string>deploystudio.mobileuser.$USERZ</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/etc/restoremobile.$USERZ.sh</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+</dict>
+</plist>
+" > "$DS_INTERNAL_DRIVE/Library/LaunchDaemons/deploystudio.mobileuser.$USERZ.plist"
+			chown root:wheel "$DS_INTERNAL_DRIVE/Library/LaunchDaemons/deploystudio.mobileuser.$USERZ.plist"
+			chmod 644 "$DS_INTERNAL_DRIVE/Library/LaunchDaemons/deploystudio.mobileuser.$USERZ.plist"
+			
+# ************
+			#mm 21 aout 2011 14h39
+# *******
+			# Write script to run at first boot (mobile account, not filevault)
+			echo -e "#!/bin/bash
+# Writing a new script in a larger script to restore filevault users on new machines...
+echo -e \"Waiting for network to be ready\"
+/usr/sbin/networksetup -detectnewhardware
+sleep 120
+
+# try to ID user, fail out if it doesn't. Maybe unload the launchd item, wait for reboot to try again.
+if [[ \`id $USERZ\` ]]; then
+	# Directory Services must be set up, lets recreate the account.
+	# Create mobile account once were bound to DS
+	/System/Library/CoreServices/ManagedClient.app/Contents/Resources/createmobileaccount -n \"$USERZ\"
+	
+	# Clean up
+	rm \"/Library/LaunchDaemons/deploystudio.mobileuser.$USERZ.plist\"
+	rm \"/etc/$USERZ.plist\"
+	rm $0
+	sudo reboot
+else
+	# Directory Services must not be set up yet.
+	# Unload the plist and wait for the next boot
+	/bin/launchctl unload \"/Library/LaunchDaemons/deploystudio.mobileuser.$USERZ.plist\"
+	echo \"Directory Services not set up yet. Exiting\"
+	exit 1
+fi" > "$DS_INTERNAL_DRIVE/etc/restoremobile.$USERZ.sh"
+			chown root:admin "$DS_INTERNAL_DRIVE/etc/restoremobile.$USERZ.sh"
+			chmod 750 "$DS_INTERNAL_DRIVE/etc/restoremobile.$USERZ.sh"
+
+			# Write computer details to plist
+			/bin/cp "$DS_BACKUP_PLIST" "$DS_INTERNAL_DRIVE/etc/$USERZ.plist"
+			chown root:admin "$DS_INTERNAL_DRIVE/etc/$USERZ.plist"
+			chmod 550 "$DS_INTERNAL_DRIVE/etc/$USERZ.plist"
+
+# *******
+			
 		fi
 		
 		# Check if user is Admin, Restore admin rights
@@ -284,10 +346,10 @@ done
 # for i in "$DS_REPOSITORY_BACKUPS/"*HOME*; do
 # Get backup tool
 
-# RESTORE_TOOL=`"$DS_INTERNAL_DRIVE/usr/libexec/PlistBuddy" -c "print :backuptool" "$DS_REPOSITORY_BACKUPS/$USERZ.BACKUP.plist"`
+RESTORE_TOOL=`"$DS_INTERNAL_DRIVE/usr/libexec/PlistBuddy" -c "print :backuptool" "$DS_REPOSITORY_BACKUPS/$USERZ.BACKUP.plist"`
 
-# case $RESTORE_TOOL in
-# 	tar )
+case $RESTORE_TOOL in
+ 	tar )
 		for i in "$DS_REPOSITORY_BACKUPS"/*HOME.tar; do
 			USERZ=`echo $(basename $i)|awk -F'_' '{print $1}'`
 			echo "Restoring $USERZ user directory with tar"
@@ -295,15 +357,15 @@ done
 			/usr/bin/tar -xf "$i" -C "$DS_LAST_RESTORED_VOLUME$DS_USER_PATH/" --strip-components=3
 			RUNTIME_ABORT "RuntimeAbortWorkflow: Could not restore home folder for $USERZ using tar...exiting." "\thome restored successfully"
 		done
-# 		;;
-# 	ditto )
-# 		for i in "$DS_REPOSITORY_BACKUPS"/*cpio.gz; do
-# 			USERZ=`echo $(basename $i)|awk -F'.' '{print $1}'`
-# 			echo "Restoring $USERZ user directory with ditto"
-# 			/usr/bin/ditto -x "$i" "$DS_LAST_RESTORED_VOLUME$DS_USER_PATH/"
-# 			RUNTIME_ABORT "RuntimeAbortWorkflow: Could not restore home folder for $USERZ using ditto...exiting." "\thome restored successfully"
-# 		done
-# 		;;
+ 		;;
+ 	ditto )
+ 		for i in "$DS_REPOSITORY_BACKUPS"/*.zip; do
+ 			USERZ=`echo $(basename $i)|awk -F'.' '{print $1}'`
+ 			echo "Restoring $USERZ user directory with ditto"
+ 			/usr/bin/ditto -x -k "$i" "$DS_LAST_RESTORED_VOLUME$DS_USER_PATH/"
+ 			RUNTIME_ABORT "RuntimeAbortWorkflow: Could not restore home folder for $USERZ using ditto...exiting." "\thome restored successfully"
+ 		done
+ 		;;
 # 	rsync )
 # 		for i in "$DS_REPOSITORY_BACKUPS"/*rsync; do
 # 			USERZ=`echo $(basename $i)|awk -F'.' '{print $1}'`
@@ -312,7 +374,7 @@ done
 # 			RUNTIME_ABORT "RuntimeAbortWorkflow: Could not restore home folder for $USERZ using rsync...exiting." "\thome restored successfully"
 # 		done
 # 		;;
-# esac
+esac
 
 echo "educ_restore_data.sh - end"
 exit 0

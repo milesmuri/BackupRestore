@@ -75,7 +75,7 @@ export DS_INTERNAL_DRIVE=`system_profiler SPSerialATADataType|awk -F': ' '/Mount
 # Set Path to the folder with home folders
 export DS_USER_PATH="/Users"
 # Default backup tool
-export BACKUP_TOOL="tar"
+export BACKUP_TOOL="ditto"
 # Filevault backup
 export FilevaultKeys="FilevaultKeys"
 
@@ -176,7 +176,11 @@ do
 			# Remove users cache? If set to 1, then yes.
 			if [[ $RMCache = 1 ]]; then
 				# Remove users home folder cache
+				echo -e "Removing user cache..."
 				rm -Rf "$DS_BACKUP/Library/Cache/"
+				# Empty the trash as well
+				echo -e "Emptying user Trash..."
+				rm -Rf "$DS_BACKUP/.Trash/*"
 			fi
 			# Backup users with tar
 			/usr/bin/tar -czpf "$DS_ARCHIVE.tar" "$DS_BACKUP" && echo -e "\tSucess: Home successfully backed up using tar" 2>/dev/null || echo -e "RuntimeAbortWorkflow: \tError: could not back up home"
@@ -185,14 +189,28 @@ do
 			# tar: Removing leading '/' from member names
 			# tar: getpwuid(<uid>) failed: No such file or directory
 				;;
-			# ditto )
-			# # Backup users with ditto
+			ditto )
+			# Remove users cache? If set to 1, then yes.
+			echo -e "Remove cache = $RMCache"
+			if [[ $RMCache = 1 ]]; then
+				# Remove users home folder cache
+				echo -e "Removing user cache... $DS_BACKUP/Library/Cache/"
+				rm -Rf "$DS_BACKUP/Library/Cache/"
+				# Empty the trash as well
+				echo -e "Emptying user Trash... $DS_BACKUP/.Trash/"
+				rm -Rf "$DS_BACKUP/.Trash/*"
+			fi
+			# Backup users with ditto
+			echo -e "Backing up user home directory to $DS_ARCHIVE.zip"
+			ditto -c -k --sequesterRsrc --keepParent "$DS_BACKUP" "$DS_ARCHIVE.zip" && echo -e "Home successfully backed up using ditto" || echo -e "Could not back up home"
+			# ****** Rusty's musings on ditto ******
 			# Create sparsedisk image with options for quota? size? 
 			# hdiutil create -size 1g -type SPARSE -fs HFS+ -volname "$USERZ" "$DS_ARCHIVE.ditto.dmg
 			# hdiutil attach "$DS_ARCHIVE.ditto.dmg"
 			# -z backups up with gzip -j flag will compress it with bzip2 and -k will use PKZip
 			# /usr/bin/ditto -vXcz --keepParent "$DS_BACKUP" "$DS_ARCHIVE.cpio.gz"	 && echo -e "Home successfully backed up using ditto" || echo -e "Could not back up home"
-			# 	;;
+			# ****** Rusty's musings on ditto ******
+			;;
 			# rsync )
 			# #Backup using rsync
 			# /usr/bin/rsync -av --update "$DS_BACKUP" "$DS_ARCHIVE.rsync/"
@@ -203,6 +221,8 @@ do
 			exit 1
 				;;
 		esac
+		/usr/libexec/PlistBuddy -c "add :backuptool string $BACKUP_TOOL" "$DS_REPOSITORY_BACKUPS/$USERZ.BACKUP.plist" 2>/dev/null
+
 		# Backup User Account
 		## Old way to check for network and mobile accounts. The idea is that local accounts have a UID < 1000 and network accounts are greater than 1000. May not hold true universally.
 		# UserID=`"$dscl" -f "$INTERNAL_DN" localonly -read "/Local/Target/Users/$USERZ" uid|awk '{print $2}'`
@@ -216,7 +236,9 @@ do
 		## Another Method that should work: check for OriginalAuthenticationAuthority. Only directory accounts have it.
 		## local accounts don't work in 10.7 yet anyway...
 		## dscl doesn't work much... changed to not falsely id local accounts
-		## Before, this would spit out a bunch of error messages, but since it ## wasn't equal to "OriginalAuthenticationAuthority", then it thought it ## was local. It wasn't. :-(
+		## Before, this would spit out a bunch of error messages, but since it 
+		## wasn't equal to "OriginalAuthenticationAuthority", then it thought it 
+		## was local. It wasn't. :-(
 		## this should work if dscl worked.
 		## TODO - make this work with another tool to check network accounts
 		## id -n might work with | to sed, I'm not well enough versed...
